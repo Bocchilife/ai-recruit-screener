@@ -33,7 +33,7 @@ OPENAI_MODEL=deepseek-chat
 
 | 命令 | 作用 |
 | --- | --- |
-| `npm test` | 20 个自动化测试：打分规则、四态判定、证据校验、文档解析、HTTP 端到端 |
+| `npm test` | 22 个自动化测试：打分规则、四态判定、证据校验、文档解析、HTTP 端到端、LLM 链路（含降级） |
 | `npm run demo:check` | 面试前 10 秒自检：拆 JD + 解析全部样例 + 打分，打印一张表，不起服务 |
 | `npm run samples` | 重新生成 10 份样例简历（PDF / 扫描件 / 纯文本） |
 
@@ -149,7 +149,7 @@ JD 文本
 server/          后端（config / llm / pipeline / scoring / store / index）
 public/          前端（一个 HTML + 一份 CSS + 一份 JS，无打包）
 samples/         10 份刻意埋坑的样例简历
-test/            node:test 自动化测试（规则 / 解析 / HTTP 端到端）
+test/            node:test 自动化测试（规则 / 解析 / HTTP 端到端 / LLM 假上游）
 scripts/         gen-samples 生成器、selftest 自检、ui-shot 与 zoom 截图工具
 docs/            设计说明、演示脚本
 ```
@@ -232,6 +232,7 @@ docs/            设计说明、演示脚本
 
 ## 10. 已知限制与下一步
 
+- **真模型的输出质量没有在本机验证**：这里没有 API Key，所以上表所有分数都是**规则模式**的实测值。LLM 链路由假上游测过（请求形状、容错、判定采用、证据回验、降级），但 prompt 在真实模型上的表现需要接上 Key 后用真实简历迭代。
 - **工作年限/实习时长靠规则解析**，遇到"每周 3 天、共 6 个月"这类复合表述会判成部分符合，需要人看一眼。
 - **中英混排 PDF 的断行**已经处理（按 `hasEOL` 断行 + 自写折行生成器），但双栏排版的简历仍可能串行。
 - **图片/扫描件不做 OCR**：这是有意不做，OCR 质量不稳会污染判定；正确做法是提示 HR 换一份文本版。
@@ -243,4 +244,5 @@ docs/            设计说明、演示脚本
 
 - 服务端只用 Node 内置能力 + 4 个依赖（express / multer / mammoth / pdfjs-dist），`engines.node >= 20`。
 - `scripts/ui-shot.mjs` 用 CDP 驱动无头 Chrome 走完主流程并截图到 `shots/`，同时打印关键元素的几何尺寸，用来代替肉眼确认"没有溢出/没有重叠"。这是开发期工具，不参与运行时。
+- `test/llm-mode.test.js` 起一个假的 OpenAI 兼容服务验证**真实会走的 LLM 代码路径**：请求形状（`response_format: json_object` / Bearer 头 / 模型名）、模型把 JSON 包进 ``` 围栏时的容错、模型判定被原样采用、模型编造的原文证据被回验标为"未核验"、以及上游 5xx 时降级规则引擎而整批不中断。本机没有 API Key，这条路径不能靠手测，只能靠假上游。
 - 设计决策的完整来龙去脉见 `docs/specs/2026-10-22-ai-recruit-screener-design.md`；现场讲解脚本见 `docs/demo-script.md`。
