@@ -1,7 +1,7 @@
 import { llmAvailable } from '../config.js';
 import { chatJSON } from '../llm/provider.js';
 import { jdRubricPrompt } from '../llm/prompts.js';
-import { normalizeRubrics, ruleRubricsFromJD } from '../scoring/rules.js';
+import { ensureSchoolRubric, normalizeRubrics, ruleRubricsFromJD } from '../scoring/rules.js';
 
 export class BadRequest extends Error {
   constructor(message, hint = '') {
@@ -39,7 +39,7 @@ export async function decomposeJD(jdText) {
   if (llmAvailable()) {
     try {
       const { data, usage } = await chatJSON(jdRubricPrompt(text));
-      const rubrics = normalizeRubrics(data?.rubrics);
+      const rubrics = normalizeRubrics(ensureSchoolRubric(data?.rubrics));
       const scored = rubrics.filter((r) => r.group !== 'redline');
       if (scored.length < 3) throw new Error(`模型只拆出 ${scored.length} 条有效评估项`);
       return {

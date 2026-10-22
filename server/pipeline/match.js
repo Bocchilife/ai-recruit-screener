@@ -6,6 +6,7 @@ import {
   buildQuestions,
   ruleProfile,
   ruleSummary,
+  ruleVerdictFor,
   ruleVerdicts,
   scoreCandidate,
   verifyEvidence,
@@ -136,6 +137,10 @@ export async function processCandidate({ candidate, jd, buffer }) {
   if (!verdicts) verdicts = ruleVerdicts(jd.rubrics, { rawText, profile });
   if (!profile) profile = fallbackProfile;
 
+  // 院校层次（985 / 211 / 双一流）是公开的确定事实：用规则引擎覆盖模型判定，
+  // 避免模型把"中山大学"认成普通本科、或反过来给不存在的院校加分。
+  verdicts = overrideSchoolTier(jd.rubrics, verdicts, { rawText, profile });
+
   const baseScore = scoreCandidate(jd.rubrics, verdicts);
   const { score, evidenceVerifiedRatio } = withEvidenceCheck(baseScore, rawText);
 
@@ -177,6 +182,18 @@ export async function processCandidate({ candidate, jd, buffer }) {
     },
   });
   return store.getCandidate(candidate.id)?.candidate;
+}
+
+/** 用规则引擎的院校层次判定覆盖模型结果（确定事实不交给模型猜） */
+function overrideSchoolTier(rubrics, verdicts, ctx) {
+  const list = Array.isArray(rubrics) ? rubrics : [];
+  const target = list.find((r) => r?.id === 'nice_school');
+  if (!target) return verdicts;
+  const rule = ruleVerdictFor(target, ctx);
+  const rest = (Array.isArray(verdicts) ? verdicts : []).filter(
+    (v) => String(v?.rubric_id || v?.rubricId || v?.id || '') !== target.id,
+  );
+  return [...rest, rule];
 }
 
 function toList(value, fallback) {

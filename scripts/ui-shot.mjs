@@ -113,7 +113,8 @@ async function main() {
   await sleep(1200);
 
   const health = await evaluate(`fetch('/api/health').then(r => r.json())`);
-  console.log(`  模式：${health.mode}`);
+  console.log(`  模式：${health.llm?.mode || health.mode} · 模型：${health.llm?.model || '(规则引擎)'}`);
+  console.log(`  顶栏徽标：${await evaluate(`document.querySelector('#modeBadge').textContent`)}`);
 
   await shot('01-empty');
 
@@ -134,6 +135,25 @@ async function main() {
   const rows = await evaluate(`document.querySelectorAll('#candList .cand').length`);
   console.log(`  候选人行数：${rows}`);
 
+  // 再导入一份新简历：验证"不清空已导入的列表"
+  const extraDir = path.join(OUT, '.tmp');
+  fs.mkdirSync(extraDir, { recursive: true });
+  const sampleTxt = fs
+    .readdirSync(path.resolve('samples'))
+    .filter((f) => f.endsWith('.txt'))
+    .sort()[0];
+  const extra = path.join(extraDir, '11-新导入候选人.txt');
+  fs.copyFileSync(path.resolve('samples', sampleTxt), extra);
+  await send('DOM.enable');
+  const { root } = await send('DOM.getDocument', { depth: -1 });
+  const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector: '#fileInput' });
+  await send('DOM.setFileInputFiles', { files: [extra], nodeId });
+  await waitFor(`document.querySelectorAll('#candList .cand').length > ${rows}`, 40000);
+  await sleep(500);
+  const rowsAfter = await evaluate(`document.querySelectorAll('#candList .cand').length`);
+  console.log(`  再导入一份后行数：${rowsAfter}（${rowsAfter > rows ? '前面的结果没有被清空 ✓' : '被清空了 ✗'}）`);
+  await shot('07-appended');
+
   await evaluate(`document.querySelectorAll('#candList .cand')[0].click(); true`);
   await waitFor(`document.querySelectorAll('.verdict-item').length > 0`);
   await sleep(500);
@@ -148,6 +168,19 @@ async function main() {
   await evaluate(`(() => { const rows = [...document.querySelectorAll('#candList .cand')]; const t = rows.find(r => /信息不足/.test(r.textContent)); if (t) t.click(); return true; })()`);
   await sleep(700);
   await shot('06-unknown');
+
+  // 院校层次细分加权是否可见（211/双一流 的项目会显示 ×0.75 / ×0.5）
+  const tier = await evaluate(`(() => {
+    const rows = [...document.querySelectorAll('#candList .cand')];
+    const box = [...document.querySelectorAll('.verdict-item')];
+    const row = rows.find(r => /南京理工|合肥工业|深圳大学/.test(r.textContent)) || rows[0];
+    row?.click();
+    return true;
+  })()`);
+  await sleep(900);
+  const factorChips = await evaluate(`[...document.querySelectorAll('.verdict-item')].map(n => n.textContent.replace(/\\s+/g, ' ')).filter(t => /重点院校/.test(t))`);
+  console.log(`  院校加分项呈现：${JSON.stringify(factorChips).slice(0, 240)}`);
+  await shot('08-school-tier');
 
   // 几何自检：关键区块是否重叠 / 溢出
   const geom = await evaluate(`(() => {

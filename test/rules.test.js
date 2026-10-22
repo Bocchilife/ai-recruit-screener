@@ -8,6 +8,11 @@ import {
   buildQuestions,
   ruleVerdictFor,
   detectAvailability,
+  detectSchool,
+  ensureSchoolRubric,
+  isRedlineHit,
+  labelPolarity,
+  ruleRubricsFromJD,
 } from '../server/scoring/rules.js';
 
 const R = (id, group, over = {}) => ({
@@ -193,3 +198,117 @@ test('每个待确认/部分符合的硬性项都有一条追问', () => {
   assert.ok(questions.some((q) => /专业|学历/.test(q)));
   assert.ok(questions.some((q) => /补充/.test(q)));
 });
+
+// ---------------------------------------------------------------------------
+// 红线极性：曾经把"好简历"判成命中红线，这是回归测试
+// ---------------------------------------------------------------------------
+
+test('红线：否定式条件不能因为"简历没写它"或"它不成立"就被判成命中', () => {
+  const rubrics = [
+    R('a', 'must', { weight: 10 }),
+    R('x', 'redline', { label: '能接受只实习少于 3 个月', weight: 0, type: 'availability' }),
+  ];
+  const v = (verdict) =>
+    scoreCandidate(rubrics, [
+      { rubric_id: 'a', verdict: 'met' },
+      { rubric_id: 'x', verdict },
+    ]);
+
+  // 否定式条件：met 才是"确实符合这条坏条件"，missing/unknown 都不该淘汰
+  assert.equal(labelPolarity('能接受只实习少于 3 个月'), 'negative');
+  assert.equal(v('missing').redlineHits.length, 0);
+  assert.equal(v('missing').decision.code, 'review');
+  assert.equal(v('met').redlineHits.length, 1);
+  assert.equal(v('met').decision.code, 'reject');
+});
+
+test('红线：正向条件下 missing 命中、unknown 不淘汰但会进追问', () => {
+  const rubrics = [
+    R('a', 'must', { weight: 10 }),
+    R('ok', 'redline', { label: '能连续实习至少 3 个月', weight: 0, type: 'availability' }),
+  ];
+  const make = (verdict) =>
+    scoreCandidate(rubrics, [
+      { rubric_id: 'a', verdict: 'met' },
+      { rubric_id: 'ok', verdict },
+    ]);
+
+  const unknown = make('unknown');
+  assert.equal(unknown.redlineHits.length, 0);
+  assert.equal(unknown.decision.code, 'review');
+  assert.equal(unknown.redlineUnknown.length, 1);
+  assert.ok(buildQuestions(unknown).some((q) => /硬性门槛/.test(q)));
+
+  const missing = make('missing');
+  assert.equal(missing.redlineHits.length, 1);
+  assert.equal(missing.decision.code, 'reject');
+  // 已经命中淘汰的项不必再问
+  assert.equal(buildQuestions(missing).some((q) => /硬性门槛/.test(q)), false);
+});
+
+// ---------------------------------------------------------------------------
+// 院校层次：985 / 211 / 双一流 是确定事实，由代码给分
+// ---------------------------------------------------------------------------
+
+test('院校层次识别：985 / 211 / 双一流 / 普通本科 / 专科 / 港澳海外', () => {
+  const cases = [
+    ['中山大学 计算机科学与技术 本科（在读）', '985', 1],
+    ['北京邮电大学 计算机科学与技术 本科', '211', 0.75],
+    ['南京邮电大学 软件工程 本科', '双一流', 0.5],
+    ['深圳大学 市场营销 本科', '普通本科', 0],
+    ['深圳职业技术学院 电子商务 专科', '专科', 0],
+    ['City University of Hong Kong, Computer Science, Bachelor', '港澳/海外', 0.6],
+  ];
+  const schoolRubric = {
+    id: 'nice_school',
+    group: 'nice',
+    label: '重点院校背景（985 / 211 / 双一流）',
+    weight: 6,
+    type: 'education',
+  };
+  for (const [text, tier, factor] of cases) {
+    assert.equal(detectSchool(text).tier, tier, `院校层次识别失败：${text}`);
+    assert.equal(ruleVerdictFor(schoolRubric, { rawText: text, profile: {} }).factor, factor, text);
+  }
+});
+
+test('院校加分项按细分系数计分：985 满额、211 拿四分之三、双一流拿一半', () => {
+  const schoolRubric = {
+    id: 'nice_school',
+    group: 'nice',
+    label: '重点院校背景（985 / 211 / 双一流）',
+    weight: 6,
+    type: 'education',
+  };
+  const rubrics = [R('a', 'must', { weight: 10 }), schoolRubric];
+  const pct = (text) => {
+    const v = ruleVerdictFor(schoolRubric, { rawText: text, profile: {} });
+    return scoreCandidate(rubrics, [{ rubric_id: 'a', verdict: 'met' }, v]).confirmedPct;
+  };
+  assert.equal(pct('中山大学 计算机科学与技术 本科'), 100); // (10 + 6) / 16
+  assert.equal(pct('北京邮电大学 计算机科学与技术 本科'), 91); // (10 + 4.5) / 16
+  assert.equal(pct('南京邮电大学 软件工程 本科'), 81); // (10 + 3) / 16
+  assert.equal(pct('深圳大学 市场营销 本科'), 63); // 10 / 16
+});
+
+test('院校加分项对任何 JD 都存在，且学历类权重更高', () => {
+  const { rubrics } = ruleRubricsFromJD('要求本科及以上学历，计算机相关专业，能连续实习 3 个月以上。');
+  const ids = rubrics.map((r) => r.id);
+  assert.ok(ids.includes('nice_school'), '院校加分项应自动补齐');
+  assert.equal(rubrics.find((r) => r.id === 'must_edu').weight, 10);
+  assert.equal(rubrics.find((r) => r.id === 'must_major').weight, 9);
+  assert.equal(rubrics.filter((r) => r.id === 'nice_school').length, 1);
+
+  // 已有院校项的 JD 不应重复追加
+  const withSchool = ensureSchoolRubric([{ id: 'nice_school', group: 'nice', label: '重点院校背景' }]);
+  assert.equal(withSchool.length, 1);
+});
+
+test('院校名不会被"帮学院老师整理数据"这类句子骗到', () => {
+  // 只有"学院"二字但没有校名：不给校名，但本科事实仍在
+  assert.equal(detectSchool('本科读的是信息管理与信息系统专业，也帮学院老师整理过海外期刊的数据。').school, '');
+  // 真校名要抠出来
+  assert.equal(detectSchool('2023.09 - 2026.06 武汉职业技术学院 市场营销 大专（在读）').school, '武汉职业技术学院');
+  assert.equal(detectSchool('2022.09 - 2026.06 深圳大学 人工智能 本科（在读，2026 届）').school, '深圳大学');
+});
+

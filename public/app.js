@@ -31,6 +31,8 @@ const VERDICT = {
   missing: { label: '不符合', cls: 'missing' },
   unknown: { label: '待确认', cls: 'unknown' },
 };
+// 四态的默认折算系数，用来判断某项是否用了更细的加权（如院校层次 985=1 / 211=0.75 / 双一流=0.5）
+const VERDICT_SCORE = { met: 1, partial: 0.6, missing: 0, unknown: 0 };
 const GROUP = { must: '硬性要求', nice: '加分项', redline: '红线' };
 
 const state = {
@@ -94,12 +96,13 @@ function setBusy(btn, busy, textWhileBusy) {
 async function boot() {
   try {
     const health = await api('/api/health');
-    state.mode = health.mode;
+    const llm = health.llm || {};
+    state.mode = llm.mode || health.mode;
     const badge = $('#modeBadge');
-    badge.textContent = health.mode === 'llm' ? `LLM 模式 · ${health.model}` : '规则模式（未配置 API Key）';
-    badge.className = `mode-badge ${health.mode}`;
+    badge.textContent = state.mode === 'llm' ? `LLM 模式 · ${llm.model || '自定义模型'}` : '规则模式（未配置 API Key）';
+    badge.className = `mode-badge ${state.mode}`;
     badge.title =
-      health.mode === 'llm'
+      state.mode === 'llm'
         ? '正在调用真实大模型做逐条判定，分数仍由代码计算'
         : '没有 API Key，自动降级为规则引擎，流程完整可跑';
   } catch (err) {
@@ -304,16 +307,30 @@ async function submitFiles(files) {
 }
 
 function startRun(runId) {
+  // 不清空已有结果：新一批简历追加到列表里，前面的仍在（HR 会分批丢简历进来）。
   state.run = { id: runId, status: 'running' };
-  state.candidates = [];
-  state.selectedId = null;
-  $('#candList').innerHTML = '';
-  $('#detail').innerHTML = '';
-  $('#detail').append(detailEmptyNode());
   $('#runBar').classList.remove('hidden');
   $('#emptyList').classList.add('hidden');
-  toast('已开始处理，结果会逐份出现');
+  toast(`已开始处理，结果会追加到下面（当前共 ${state.candidates.length} 位）`);
   poll(runId);
+}
+
+/** 按文件名合并新一批结果：不同文件追加，同名文件覆盖（HR 改了简历重传的情况） */
+function mergeCandidates(incoming) {
+  const previous = state.candidates;
+  const byName = new Map(previous.map((c) => [c.fileName, c]));
+  for (const c of incoming || []) byName.set(c.fileName, c);
+  state.candidates = [...byName.values()];
+
+  // 当前选中的那份若被同名新结果覆盖，跟着切到新 id，否则详情会停在旧数据上
+  if (state.selectedId && !state.candidates.some((c) => c.id === state.selectedId)) {
+    const oldName = previous.find((c) => c.id === state.selectedId)?.fileName;
+    const next = oldName && state.candidates.find((c) => c.fileName === oldName);
+    if (next) {
+      state.selectedId = next.id;
+      refreshDetail(next.id, { silent: true });
+    }
+  }
 }
 
 function stopPoll() {
@@ -326,16 +343,16 @@ async function poll(runId) {
   try {
     const run = await api(`/api/run/${runId}`);
     state.run = run;
-    state.candidates = run.candidates;
+    mergeCandidates(run.candidates);
     if (state.jd) {
       state.jd.role = run.role || state.jd.role;
     }
     renderRunBar(run);
-    renderFilters(run.candidates);
+    renderFilters(state.candidates);
     renderList();
 
     if (!state.selectedId) {
-      const first = run.candidates.find((c) => c.status === 'done');
+      const first = state.candidates.find((c) => c.status === 'done');
       if (first) selectCandidate(first.id, { silent: true });
     } else if (state.detail?.status === 'analyzing' || state.detail?.status === 'queued') {
       // 选中的还在跑：随批次刷新
@@ -347,7 +364,11 @@ async function poll(runId) {
     } else {
       $('#runBar').classList.add('hidden');
       const failed = run.candidates.filter((c) => c.status === 'unparsed' || c.status === 'failed').length;
-      toast(failed ? `处理完成，${failed} 份没能解析，点开看原因` : `全部完成：${run.candidates.length} 位候选人`);
+      toast(
+        failed
+          ? `本批完成，${failed} 份没能解析，点开看原因`
+          : `本批完成：新增 ${run.candidates.length} 份，列表共 ${state.candidates.length} 位候选人`,
+      );
     }
   } catch (err) {
     stopPoll();
@@ -610,6 +631,16 @@ function renderDetail(c) {
       const head = el('div', 'vi-head');
       head.append(el('span', `verdict ${v.cls}`, v.label));
       head.append(el('span', 'vi-label', esc(item.label)));
+      const factor = Number(item.factor);
+      const finer = Number.isFinite(factor) && (item.id === 'nice_school' || Math.abs(factor - (VERDICT_SCORE[item.verdict] ?? 0)) > 1e-6);
+      if (finer) {
+        const chip = el('span', 'vi-weight', `×${factor}`);
+        chip.title =
+          item.id === 'nice_school'
+            ? '院校层次按公开事实加权：985 = 1、211 = 0.75、双一流 = 0.5、港澳/海外 = 0.6、普通本科/专科 = 0'
+            : '该项按细分比例计分';
+        head.append(chip);
+      }
       head.append(el('span', 'vi-weight', g === 'redline' ? '红线' : `权重 ${item.weight}`));
       row.append(head);
       if (item.reason) row.append(el('div', 'vi-reason', esc(item.reason)));

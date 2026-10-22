@@ -72,6 +72,24 @@ function respond(messages) {
     const lines = resume.split('\n').map((s) => s.trim()).filter((s) => s.length > 8);
     // 从原文里挑一句真实存在的片段当证据，让回验能通过
     const realQuote = (lines.find((l) => /大学|学院/.test(l)) || lines[0] || 'Python').slice(0, 40);
+    // 用户消息里带着这次的评估项，按它逐条给判定（真实链路也是这样一问一答）
+    const rubricJson = (user.match(/评估项（JSON）：\s*(\[[\s\S]*?\])\s*\n\n简历原文/) || [])[1];
+    let rubrics = RUBRICS;
+    try {
+      if (rubricJson) rubrics = JSON.parse(rubricJson);
+    } catch {
+      /* 用默认的 */
+    }
+    const verdicts = rubrics.map((r) => {
+      if (r.id === 'nice_ai') {
+        return { rubric_id: 'nice_ai', verdict: 'missing', confidence: 0.8, evidence: [FABRICATED], reason: '模型自称有证据' };
+      }
+      if (r.group === 'redline') {
+        // 关键回归场景：模型对"红线里的坏情况"答 missing（它不成立），这曾经被当成"命中红线"
+        return { rubric_id: r.id, verdict: 'missing', confidence: 0.9, evidence: [realQuote], reason: '简历没有出现该负面情况' };
+      }
+      return { rubric_id: r.id, verdict: 'met', confidence: 0.85, evidence: [realQuote], reason: '满足' };
+    });
     return JSON.stringify({
       profile: {
         name: '张思远',
@@ -79,11 +97,7 @@ function respond(messages) {
         skills: ['Python', 'FastAPI'],
         availability: '可实习 6 个月',
       },
-      verdicts: [
-        { rubric_id: 'must_major', verdict: 'met', confidence: 0.92, evidence: [realQuote], reason: '专业与学历都对口' },
-        { rubric_id: 'must_code', verdict: 'met', confidence: 0.85, evidence: ['Python'], reason: '项目里有 Python 代码' },
-        { rubric_id: 'nice_ai', verdict: 'missing', confidence: 0.8, evidence: [FABRICATED], reason: '模型自称有证据' },
-      ],
+      verdicts,
     });
   }
 
@@ -186,8 +200,8 @@ test('LLM 模式：请求形状正确、模型判定被采用、伪造证据被�
   assert.equal(parsedRes.status, 200, stderr);
   const parsed = parsedRes.body;
   assert.equal(parsed.mode, 'llm');
-  // 模型返回的 id 被原样采用（而不是被规则模板顶掉）
-  assert.deepEqual(parsed.rubrics.map((r) => r.id), RUBRICS.map((r) => r.id));
+  // 模型返回的 id 被原样采用（而不是被规则模板顶掉），院校层次加分项由代码补齐
+  assert.deepEqual(parsed.rubrics.map((r) => r.id), [...RUBRICS.map((r) => r.id), 'nice_school']);
 
   // 请求形状：OpenAI 兼容 + JSON 模式 + Bearer 鉴权 + 指定模型
   const first = seen.at(-1);
@@ -215,7 +229,7 @@ test('LLM 模式：请求形状正确、模型判定被采用、伪造证据被�
 
   const detail = (await api(`/api/candidate/${cand.id}`)).body;
   // 判定来自模型，而不是规则引擎：一条 met、一条伪造证据的 missing
-  assert.equal(detail.score.items.length, RUBRICS.length);
+  assert.equal(detail.score.items.length, RUBRICS.length + 1);
   const ai = detail.score.items.find((i) => i.id === 'nice_ai');
   assert.equal(ai.verdict, 'missing');
   assert.equal(ai.evidence.length, 1);
@@ -224,6 +238,12 @@ test('LLM 模式：请求形状正确、模型判定被采用、伪造证据被�
   const major = detail.score.items.find((i) => i.id === 'must_major');
   assert.equal(major.verdict, 'met');
   assert.ok(major.evidence.every((e) => e.verified), '真实原文片段应通过回验');
+
+  // 院校层次：模型没给这条判定，代码按公开事实补齐（中山大学 = 985 → met / ×1）
+  const school = detail.score.items.find((i) => i.id === 'nice_school');
+  assert.equal(school.verdict, 'met', '985 院校应判符合');
+  assert.equal(school.factor, 1);
+  assert.match(school.reason, /985/);
 
   // 结论文案也来自模型（模板不会写这句话）
   assert.equal(detail.summary.headline, '计算机在读，AI 项目能上手');
@@ -256,4 +276,56 @@ test('模型挂掉时降级规则引擎，整批不中断', { timeout: 60000 }, 
   } finally {
     mockMode = 'happy';
   }
+});
+
+// ---------------------------------------------------------------------------
+// 红线：曾经因为"否定式条件 + 模型答 missing"把好简历全部判红，这里走完整 HTTP 链路回归
+// ---------------------------------------------------------------------------
+
+async function screenOne(jd, prefix = '01') {
+  const files = (await api('/api/samples')).body.samples.map((s) => s.name);
+  const target = files.find((f) => f.startsWith(prefix));
+  const started = await api('/api/screen', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jd, samples: [target] }),
+  });
+  assert.equal(started.status, 202, JSON.stringify(started.body));
+  const run = await waitRun(started.body.runId);
+  const cand = run.candidates[0];
+  assert.equal(cand.status, 'done', JSON.stringify(cand));
+  return (await api(`/api/candidate/${cand.id}`)).body;
+}
+
+test('红线：模型对否定式条件答 missing 时不能判成命中（曾经的"全员变红"）', { timeout: 60000 }, async () => {
+  const jd = {
+    role: 'AI 自动化实习生',
+    rubrics: [
+      { id: 'must_major', group: 'must', label: '计算机相关专业', weight: 9, type: 'education', probe: '专业' },
+      { id: 'redline_short', group: 'redline', label: '只能实习少于 3 个月', weight: 0, type: 'availability', probe: '实习时长' },
+    ],
+  };
+  const detail = await screenOne(jd);
+  const red = detail.score.items.find((i) => i.id === 'redline_short');
+  assert.equal(red.verdict, 'missing', '模型对坏条件确实答 missing');
+  assert.equal(red.polarity, 'negative', '否定式表述应被识别');
+  assert.equal(detail.score.redlineHits.length, 0, '否定式条件不成立 ≠ 命中红线');
+  assert.equal(detail.score.decision.code, 'review');
+  assert.ok(!/触发红线/.test(detail.score.decision.reason || ''));
+});
+
+test('红线：正向条件被判 missing 时确实一票否决', { timeout: 60000 }, async () => {
+  const jd = {
+    role: 'AI 自动化实习生',
+    rubrics: [
+      { id: 'must_major', group: 'must', label: '计算机相关专业', weight: 9, type: 'education', probe: '专业' },
+      { id: 'redline_intern', group: 'redline', label: '能连续实习至少 3 个月', weight: 0, type: 'availability', probe: '实习时长' },
+    ],
+  };
+  const detail = await screenOne(jd);
+  const red = detail.score.items.find((i) => i.id === 'redline_intern');
+  assert.equal(red.polarity, 'positive');
+  assert.equal(detail.score.redlineHits.length, 1);
+  assert.equal(detail.score.decision.code, 'reject');
+  assert.match(detail.score.decision.reason, /触发红线/);
 });

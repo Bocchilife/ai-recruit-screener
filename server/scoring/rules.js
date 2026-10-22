@@ -25,6 +25,167 @@ const IT_FAMILY = [
 const MAJOR_TAIL =
   /(营销|工程|科学与技术|技术|系统|智能|管理|经济|贸易|商务|英语|日语|设计|自动化|通信|电子|统计|会计|金融|教育|文学|法学|医学|数学|物理|化学|生物|新闻|建筑|土木|材料|环境|科学|艺术)$/;
 
+// ---------------------------------------------------------------------------
+// 院校层次：985 / 211 / 双一流 是公开的确定事实，交给代码判定，不交给模型猜。
+// 清单不追求完整（列的是常见院校），未命中的落到"普通本科 / 专科"，不影响主流程。
+// ---------------------------------------------------------------------------
+
+const SCHOOL_985 = [
+  '北京大学', '清华大学', '中国人民大学', '北京航空航天大学', '北京理工大学', '中国农业大学',
+  '北京师范大学', '中央民族大学', '南开大学', '天津大学', '大连理工大学', '吉林大学',
+  '哈尔滨工业大学', '复旦大学', '同济大学', '上海交通大学', '华东师范大学', '南京大学',
+  '东南大学', '浙江大学', '中国科学技术大学', '厦门大学', '山东大学', '中国海洋大学',
+  '武汉大学', '华中科技大学', '湖南大学', '中南大学', '中山大学', '华南理工大学', '四川大学',
+  '电子科技大学', '重庆大学', '西安交通大学', '西北工业大学', '兰州大学', '国防科技大学',
+  '东北大学', '西北农林科技大学',
+];
+
+const SCHOOL_211 = [
+  '北京交通大学', '北京工业大学', '北京科技大学', '北京化工大学', '北京邮电大学', '北京林业大学',
+  '北京中医药大学', '北京外国语大学', '中国传媒大学', '中央财经大学', '对外经济贸易大学',
+  '北京体育大学', '中央音乐学院', '中国政法大学', '华北电力大学', '天津医科大学', '河北工业大学',
+  '太原理工大学', '内蒙古大学', '辽宁大学', '大连海事大学', '延边大学', '东北师范大学',
+  '哈尔滨工程大学', '东北农业大学', '东北林业大学', '华东理工大学', '东华大学', '上海外国语大学',
+  '上海财经大学', '上海大学', '苏州大学', '南京航空航天大学', '南京理工大学', '中国矿业大学',
+  '河海大学', '江南大学', '南京农业大学', '中国药科大学', '南京师范大学', '安徽大学', '合肥工业大学',
+  '福州大学', '南昌大学', '中国石油大学', '郑州大学', '中国地质大学', '武汉理工大学', '华中农业大学',
+  '华中师范大学', '中南财经政法大学', '湖南师范大学', '暨南大学', '华南师范大学', '海南大学',
+  '广西大学', '西南交通大学', '西南财经大学', '四川农业大学', '西南大学', '贵州大学', '云南大学',
+  '西藏大学', '西北大学', '西安电子科技大学', '长安大学', '陕西师范大学', '青海大学', '宁夏大学',
+  '新疆大学', '石河子大学',
+];
+
+const SCHOOL_DFC = [
+  '上海科技大学', '南方科技大学', '南京信息工程大学', '南京邮电大学', '南京林业大学', '南京中医药大学',
+  '南京医科大学', '宁波大学', '首都师范大学', '首都医科大学', '天津工业大学', '山西大学', '湘潭大学',
+  '华南农业大学', '广州中医药大学', '广州医科大学', '成都理工大学', '西南石油大学', '成都中医药大学',
+  '北京协和医学院', '外交学院', '中国人民公安大学', '中央美术学院', '中国美术学院', '中国音乐学院',
+  '上海海洋大学', '上海中医药大学', '上海体育学院', '上海音乐学院',
+];
+
+/** 院校层次 → 该加分项的判定与加权系数（985 拿满，211 拿 3/4，双一流拿一半） */
+export const SCHOOL_TIER = {
+  '985': { verdict: 'met', factor: 1 },
+  '211': { verdict: 'partial', factor: 0.75 },
+  双一流: { verdict: 'partial', factor: 0.5 },
+  '港澳/海外': { verdict: 'partial', factor: 0.6 },
+  普通本科: { verdict: 'missing', factor: 0 },
+  专科: { verdict: 'missing', factor: 0 },
+};
+
+/** 常见院校的英文写法（留学生的简历就是这么写校名的） */
+const SCHOOL_985_EN = [
+  /peking university|tsinghua/i,
+  /fudan university/i,
+  /zhejiang university/i,
+  /shanghai (?:jiao\s?tong|jiaotong) university/i,
+  /nanjing university(?!\s+of)/i,
+  /wuhan university(?!\s+of)/i,
+  /sun yat-?sen/i,
+  /huazhong university of science and technology/i,
+  /university of science and technology of china/i,
+  /harbin institute of technology/i,
+  /xi'?an jiaotong/i,
+  /sichuan university/i,
+  /shandong university/i,
+  /xiamen university/i,
+  /nankai university/i,
+  /tongji university/i,
+  /southeast university/i,
+  /beihang|beijing university of aeronautics/i,
+  /beijing institute of technology/i,
+  /renmin university|people'?s university of china/i,
+  /china agricultural university/i,
+  /east china normal university/i,
+  /central south university/i,
+  /hunan university(?!\s+of)/i,
+  /chongqing university(?!\s+of)/i,
+  /northwestern polytechnical/i,
+  /lanzhou university/i,
+  /jilin university/i,
+  /dalian university of technology/i,
+  /national university of defense technology/i,
+];
+
+const SCHOOL_211_EN = [
+  /beijing university of posts|bupt/i,
+  /nanjing university of (?:aeronautics|posts|science)/i,
+  /wuhan university of technology/i,
+  /south china university of technology/i,
+  /nanjing normal university/i,
+  /soochow university/i,
+  /xidian university/i,
+  /east china university of science and technology/i,
+  /beijing university of technology(?!\s+of)/i,
+  /donghua university/i,
+  /shanghai university(?!\s+of)/i,
+  /china university of (?:mining|petroleum|geosciences)/i,
+];
+
+/**
+ * 只认"明确的境外院校名"，不认"简历里出现了美国/海外"这类泛词——
+ * 曾经因为一句"帮学院老师整理海外期刊数据"就把深圳大学判成了港澳/海外院校。
+ */
+const OVERSEAS_SCHOOL_RE =
+  /香港(?:中文|科技|理工|城市|浸会|岭南|教育|都会)大学|澳门(?:科技)?大学|台湾大学|新加坡国立大学|南洋理工|海外院校|留学|city university of hong kong|university of hong kong|chinese university of hong kong|hong kong (?:university of science|polytechnic)|national university of singapore|nanyang technological|university of melbourne|university of toronto|university of sydney|imperial college|university college london|new york university/i;
+
+const EDU_LINE_RE = /大学|学院|本科|硕士|博士|大专|专科|届|在读|university|college|bachelor|master|degree/i;
+
+const GENERIC_SCHOOL_RE = /大学|学院|university|college|institute/i;
+
+/** 只看教育背景相关的行，避免"合作大学""客户学院"之类误命中 */
+function eduScope(rawText) {
+  const text = String(rawText || '');
+  const lines = text.split('\n').filter((l) => EDU_LINE_RE.test(l));
+  return lines.length ? lines.join('\n') : text;
+}
+
+export function detectSchool(rawText) {
+  const scope = eduScope(rawText);
+  const byList = (list, tier) => {
+    const school = list.find((s) => scope.includes(s));
+    return school ? { school, tier } : null;
+  };
+  const byEn = (list, tier) => {
+    for (const re of list) {
+      const m = scope.match(re);
+      if (m) return { school: m[0], tier };
+    }
+    return null;
+  };
+
+  const found =
+    byList(SCHOOL_985, '985') ||
+    byEn(SCHOOL_985_EN, '985') ||
+    byList(SCHOOL_211, '211') ||
+    byEn(SCHOOL_211_EN, '211') ||
+    byList(SCHOOL_DFC, '双一流') ||
+    byEn([OVERSEAS_SCHOOL_RE], '港澳/海外');
+  if (found) return found;
+
+  if (/大专|专科|职业技术学院|职业学院|高职/.test(scope)) {
+    return { school: schoolNameFrom(scope, /([\u4e00-\u9fa5]{2,12}(?:职业技术学院|职业学院|专科学校|高职院?校?))/), tier: '专科' };
+  }
+  if (GENERIC_SCHOOL_RE.test(scope) && detectDegree(scope)) {
+    return { school: schoolNameFrom(scope), tier: '普通本科' };
+  }
+  return { school: '', tier: '' };
+}
+
+const GENERIC_SCHOOL_NAME_RE = /([\u4e00-\u9fa5]{2,12}(?:大学|学院|学校))/;
+
+/** 从教育经历行里抠出校名（专科/普通本科这类没进清单的学校，让原因文案里也能写出名字） */
+function schoolNameFrom(scope, re = GENERIC_SCHOOL_NAME_RE) {
+  const s = String(scope || '');
+  // "也帮学院老师整理数据" 这种不是校名：名字里带上这些虚词/动词就跳过
+  const unsafe = /[帮在于是的了到和与或及其该每各从对把被让给将为以所而]/;
+  const global = new RegExp(re.source, 'g');
+  for (const m of s.matchAll(global)) {
+    if (!unsafe.test(m[1])) return m[1];
+  }
+  return '';
+}
+
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 /** 去掉空白与常见标点，用于证据做包含性校验 */
@@ -137,6 +298,29 @@ export function normalizeRubrics(raw) {
 }
 
 // ---------------------------------------------------------------------------
+// 红线极性
+//
+// 曾经踩过的坑：红线条件写成否定式（"只能实习少于 3 个月""专业无关且无编程证据"），
+// 而判定语义是「met = 简历能证明满足」。好简历对否定式条件答 missing（"这条不成立"），
+// 却被当成"命中红线"，于是全员被否。
+// 现在两层修：① 生成侧一律写正向条件（必须具备什么）；② 打分侧仍按极性兼容否定式表述。
+// ---------------------------------------------------------------------------
+
+const NEGATIVE_LABEL_RE =
+  /(无关|没有任何|无任何|不具备|不含|未曾|未体现|没有|缺少|缺失|缺乏|不足|低于|少于|不超过|不接受|不允许|不符|不合适|拒绝|非)/;
+
+export function labelPolarity(label) {
+  return NEGATIVE_LABEL_RE.test(String(label || '')) ? 'negative' : 'positive';
+}
+
+/** 是否符合"命中红线"（正向条件看 missing，否定式条件看 met） */
+export function isRedlineHit(item) {
+  if (!item || item.group !== 'redline') return false;
+  const polarity = item.polarity || labelPolarity(item.label);
+  return polarity === 'negative' ? item.verdict === 'met' : item.verdict === 'missing';
+}
+
+// ---------------------------------------------------------------------------
 // 打分
 // ---------------------------------------------------------------------------
 
@@ -152,13 +336,18 @@ export function scoreCandidate(rubrics, rawVerdicts = []) {
     const raw = byId.get(r.id) || {};
     const verdict = VERDICT_FACTOR[raw.verdict] === undefined ? 'unknown' : raw.verdict;
     const evidenceRaw = Array.isArray(raw.evidence) ? raw.evidence : raw.evidence ? [raw.evidence] : [];
+    // 每条判定可以自带更细的系数（如院校层次 985=1 / 211=0.75 / 双一流=0.5），
+    // 没给就退回四态系数，这样模型只管判定、细粒度加权仍由代码控制。
+    const custom = raw.factor === undefined || raw.factor === null ? NaN : Number(raw.factor);
+    const factor = Number.isFinite(custom) ? clamp(custom, 0, 1) : VERDICT_FACTOR[verdict];
     return {
       ...r,
       verdict,
+      polarity: labelPolarity(r.label),
       confidence: clamp(Number(raw.confidence ?? (verdict === 'unknown' ? 0.3 : 0.6)), 0, 1),
       evidenceRaw: evidenceRaw.map((e) => String(e)).filter(Boolean),
       reason: String(raw.reason || '').slice(0, 120),
-      factor: VERDICT_FACTOR[verdict],
+      factor,
     };
   });
 
@@ -175,7 +364,10 @@ export function scoreCandidate(rubrics, rawVerdicts = []) {
   const mustMissing = mustItems.filter((i) => i.verdict === 'missing');
   const mustPartial = mustItems.filter((i) => i.verdict === 'partial');
   const mustUnknown = mustItems.filter((i) => i.verdict === 'unknown');
-  const redlineHits = items.filter((i) => i.group === 'redline' && i.verdict === 'missing');
+  const redlineItems = items.filter((i) => i.group === 'redline');
+  const redlineHits = redlineItems.filter((i) => isRedlineHit(i));
+  // 红线"没写"不淘汰（unknown 与"明确不满足"不是一回事），但会进追问清单
+  const redlineUnknown = redlineItems.filter((i) => i.verdict === 'unknown');
 
   const ratio = (arr) => (arr.length === 0 ? 1 : arr.reduce((s, i) => s + i.factor, 0) / arr.length);
 
@@ -193,6 +385,7 @@ export function scoreCandidate(rubrics, rawVerdicts = []) {
     mustPartial,
     mustUnknown,
     redlineHits,
+    redlineUnknown,
     decision,
     stats: {
       total: items.length,
@@ -289,7 +482,14 @@ const QUESTION_BY_TYPE = {
 export function buildQuestions(score) {
   const questions = [];
   for (const item of score.items) {
-    if (item.group === 'redline' && item.verdict !== 'missing') continue;
+    if (item.group === 'redline') {
+      if (isRedlineHit(item)) continue; // 已否决，不必再问
+      if (item.verdict === 'unknown') {
+        questions.push(`岗位有一条硬性门槛「${item.label}」，简历里没有体现，能否确认一下你是否满足？`);
+      }
+      continue;
+    }
+    if (item.id === 'nice_school') continue; // 院校层次是确定事实，不必问候选人
     if (item.verdict === 'unknown') {
       const tpl = QUESTION_BY_TYPE[item.type] || QUESTION_BY_TYPE.other;
       questions.push(tpl.replace('{label}', item.label));
@@ -454,12 +654,14 @@ export function ruleProfile(rawText) {
   const prefixName = (/^[\u4e00-\u9fa5]{2,4}/.exec(lines[0] || '') || [''])[0];
   const degree = detectDegree(text);
   const availability = detectAvailability(text);
+  const school = detectSchool(text);
   return {
     name: cjkName || selfIntro || asciiName || (NAME_STOP.test(prefixName) ? '' : prefixName) || '未识别姓名',
     contact: { phone, email },
     education: {
       degree: degree?.word || '',
-      school: (text.match(/([\u4e00-\u9fa5]{2,14}(?:大学|学院))/) || [''])[0],
+      school: school.school || (text.match(/([\u4e00-\u9fa5]{2,14}(?:大学|学院))/) || [''])[0],
+      tier: school.tier,
       major: detectMajor(text),
       graduation: (text.match(/(20\d{2})\s*年\s*(?:6|7)?\s*月?\s*毕业/) || [''])[0],
       status: /在读|研[一二三]|大[一二三四]|应届|expected/.test(text) ? '在读/应届' : '',
@@ -506,14 +708,21 @@ export function ruleVerdictFor(rubric, { rawText, profile }) {
   const label = String(rubric.label || '');
   const base = { rubric_id: rubric.id, confidence: 0.45 };
 
-  // 1) 红线：明确冲突
+  // 1) 红线：先处理"明确冲突"的硬证据
   for (const rule of REDLINE_CONFLICT) {
     if (rule.need.test(label) && rule.deny.test(text)) {
-      return { ...base, verdict: 'missing', evidence: pickEvidence(text, ['远程', '兼职', '线上']), reason: '简历明确写明与红线条件冲突' };
+      return {
+        ...base,
+        verdict: labelPolarity(label) === 'negative' ? 'met' : 'missing',
+        evidence: pickEvidence(text, ['远程', '兼职', '线上']),
+        reason: '简历明确写明与红线条件冲突',
+      };
     }
   }
-  if (rubric.group === 'redline') {
-    return { ...base, verdict: 'unknown', evidence: [], reason: '规则模式无法判定红线条件' };
+  // 否定式红线（"必须不能……"）规则引擎不做硬判，避免又出现"好简历被判红"；
+  // 正向红线继续走下面的通用分支，因为"必须具备"的条件本来就可以逐条判定。
+  if (rubric.group === 'redline' && labelPolarity(label) === 'negative') {
+    return { ...base, verdict: 'unknown', evidence: [], reason: '否定式红线条件，规则引擎不下硬结论，转人工确认' };
   }
 
   // 2) 学历门槛（label 里出现了具体学历词才算）
@@ -530,6 +739,21 @@ export function ruleVerdictFor(rubric, { rawText, profile }) {
       return { ...base, verdict: 'met', confidence: 0.7, evidence: ev, reason: `最高学历为${have.word}，满足要求` };
     }
     return { ...base, verdict: 'missing', confidence: 0.75, evidence: ev, reason: `最高学历为${have.word}，低于岗位要求` };
+  }
+
+  // 2.5) 院校层次（985 / 211 / 双一流）：确定事实，代码判定，不进模型
+  if (rubric.id === 'nice_school' || /985|211|双一流|院校层次|名校/i.test(label)) {
+    const { school, tier } = detectSchool(text);
+    if (!tier) return { ...base, verdict: 'unknown', evidence: [], reason: '简历没有写清院校' };
+    const conf = SCHOOL_TIER[tier];
+    return {
+      ...base,
+      verdict: conf.verdict,
+      factor: conf.factor,
+      confidence: 0.85,
+      evidence: pickEvidence(text, [school || '大学', '本科', '硕士']),
+      reason: `${school ? `${school}（${tier}）` : tier}，院校层次加权 ×${conf.factor}`,
+    };
   }
 
   // 3) 专业是否对口
@@ -651,7 +875,7 @@ const CONDITION_LIBRARY = [
   {
     id: 'must_edu',
     test: /本科及以上|硕士及以上|学历要求|大专及以上/,
-    group: 'must', weight: 8, type: 'education',
+    group: 'must', weight: 10, type: 'education',
     label: '本科及以上学历',
     probe: '学历层次、毕业时间',
     keywords: [],
@@ -659,7 +883,7 @@ const CONDITION_LIBRARY = [
   {
     id: 'must_major',
     test: /计算机|软件工程|IT\s*相关|信息工程|理工科|技术专业|专业背景/,
-    group: 'must', weight: 8, type: 'education',
+    group: 'must', weight: 9, type: 'education',
     label: '计算机 / 软件工程 / IT 相关专业背景',
     probe: '专业名称、主修课程',
     keywords: [],
@@ -732,6 +956,23 @@ const CONDITION_LIBRARY = [
 
 const SOFT_SKILL_RE = /主动学习|解决问题|沟通能力|抗压|责任心|热情|综合素质|愿意理解业务/;
 
+export const SCHOOL_RUBRIC = {
+  id: 'nice_school',
+  group: 'nice',
+  label: '重点院校背景（985 / 211 / 双一流）',
+  weight: 6,
+  type: 'education',
+  probe: '院校层次',
+  keywords: [],
+};
+
+/** 院校层次加分项对任何 JD 都成立，先补齐再交给判定 */
+export function ensureSchoolRubric(rubrics) {
+  const list = Array.isArray(rubrics) ? rubrics : [];
+  if (list.some((r) => r?.id === 'nice_school' || /985|211|双一流/.test(String(r?.label || '')))) return list;
+  return [...list, SCHOOL_RUBRIC];
+}
+
 export function ruleRubricsFromJD(jdText) {
   const text = String(jdText || '');
   const out = [];
@@ -745,14 +986,14 @@ export function ruleRubricsFromJD(jdText) {
   }
   if (!out.some((r) => r.group === 'must')) {
     out.unshift(
-      { id: 'must_edu', group: 'must', label: '本科及以上学历', weight: 8, type: 'education', probe: '学历与专业', keywords: [] },
+      { id: 'must_edu', group: 'must', label: '本科及以上学历', weight: 10, type: 'education', probe: '学历与专业', keywords: [] },
       { id: 'must_relevant', group: 'must', label: '有与岗位相关的项目或实习经历', weight: 7, type: 'experience', probe: '相关经历', keywords: [] },
     );
   }
   const softSkipped = SOFT_SKILL_RE.test(text)
     ? ['主动学习与解决问题能力', '沟通与跨文化协作', '对业务的主动性']
     : [];
-  return { rubrics: normalizeRubrics(out), softSkipped };
+  return { rubrics: normalizeRubrics(ensureSchoolRubric(out)), softSkipped };
 }
 
 // ---------------------------------------------------------------------------
@@ -768,6 +1009,7 @@ export function ruleSummary({ role, profile, score }) {
   if (score.mustMissing.length) risks.push(`硬性要求未满足：${score.mustMissing.map((i) => i.label).join('、')}`);
   if (score.mustPartial?.length) risks.push(`硬性要求仅部分满足：${score.mustPartial.map((i) => i.label).join('、')}`);
   if (score.redlineHits.length) risks.push(`触发红线：${score.redlineHits.map((i) => i.label).join('、')}`);
+  if (score.redlineUnknown?.length) risks.push(`红线待确认：${score.redlineUnknown.map((i) => i.label).join('、')}`);
   if (score.coveragePct < 80) risks.push(`信息覆盖率 ${score.coveragePct}%，有 ${score.stats.unknown} 项无法从简历确认`);
 
   const questions = buildQuestions(score);
@@ -791,4 +1033,4 @@ export function ruleSummary({ role, profile, score }) {
   return { headline, strengths, risks, questions, message: message.slice(0, 160) };
 }
 
-export const __internals = { splitSentences, pickEvidence, rubricKeywords, CONDITION_LIBRARY };
+export const __internals = { splitSentences, pickEvidence, rubricKeywords, CONDITION_LIBRARY, detectSchool, isRedlineHit };
