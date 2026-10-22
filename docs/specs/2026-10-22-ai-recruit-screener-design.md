@@ -79,23 +79,31 @@ Node 24 + Express 5 + 原生 HTML/CSS/JS（`public/`），`npm i && npm start` �
 ## 4. 打分数学
 
 ```
-item_score_i = weight_i × f(verdict_i)     f: met=1.0, partial=0.6, missing=0, unknown=0
-confirmed    = Σ item_score_i / Σ weight_i        // 分母固定为全部 rubric 权重
+factor_i     = item.factor ?? f(verdict_i)        // 判定可以自带系数（院校层次需要细分）
+f: met=1.0, partial=0.6, missing=0, unknown=0
+item_score_i = weight_i × factor_i
+confirmed    = Σ item_score_i / Σ weight_i        // 分母固定为全部 rubric 权重（红线权重 0，不进分母）
 coverage     = 1 − Σ(unknown 权重) / Σ(权重)
+redline_hit_i= 极性(label)==negative ? (verdict==met) : (verdict==missing)
 ```
 
-结论（按优先级短路，先判红线）：
+结论（按优先级短路）：
 
 ```
-if 命中任一 redline(违规)                    → 暂缓考虑（红线：…）
-else if must 中 missing ≥ 2                  → 暂缓考虑
-else if confirmed ≥ 0.75 && must 无 missing  → 建议进入人工复核
-else if confirmed ≥ 0.50 || must missing ≤ 1 → 待定，建议补充信息后复评
-else                                          → 暂缓考虑
+if 任一 redline 命中                          → 暂缓考虑（红线：…）
+else if must 中 missing ≥ 2                   → 暂缓考虑
+else if coverage < 0.5                        → 信息不足 · 需补充简历
+else if must 中 missing == 1                  → confirmed < 0.5 ? 暂缓 : 待定
+else if confirmed ≥ 0.75 && must 无 partial/unknown → 建议进入人工复核
+else                                          → 待定，建议补充信息后复评
 ```
 
 分数展示为 `confirmed` 的百分制整数 + 独立的覆盖率条，**不把 coverage 混进总分**，避免"没写信息"和
 "不符合"在视觉上被混同。
+
+红线用**极性判定**而不是"missing 即命中"：JD 里的红线既可能写成正向条件（"能连续实习 3 个月以上"），
+也可能写成否定式（"只能实习少于 3 个月"），只按 verdict 判会把好简历全部判红——这是实现期真实踩到的坑
+（详见第 11 节）。红线判 `unknown` 时不淘汰，只进追问清单。
 
 ## 5. 模块边界
 
@@ -126,11 +134,10 @@ else                                          → 暂缓考虑
 
 ## 7. 测试策略
 
-`node --test test/`：打分公式边界（unknown 不给分、全 met=100、权重归一）、结论短路优先级（红线优先于
+`npm test`（`node --test`，31 个用例）：打分公式边界（unknown 不给分、全 met=100、权重归一）、结论短路优先级（红线优先于
 高分）、规则引擎同义词与年限抽取、简历文本抽取（用内置 PDF fixture）、证据校验函数。
 
-不做端到端浏览器测试（成本收益不划算），改为 `scripts/selftest.mjs` 启动服务后对真实接口做一遍全链路
-断言（含降级路径与 CSV 导出）。
+不做端到端浏览器测试（成本收益不划算）。改为两层替代：`test/api.test.js` 真实起服务跑 HTTP 全链路（含 422/404\n与文件名穿越），`test/llm-mode.test.js` 起假 OpenAI 兼容上游验证模型链路（请求形状、围栏容错、判定采用、证据回验、\n降级、红线极性）；`scripts/ui-shot.mjs` 用 CDP 驱动无头浏览器截图并打印几何量测，代替肉眼验收布局。
 
 ## 8. 样例数据
 
@@ -147,3 +154,35 @@ else                                          → 暂缓考虑
 
 可运行 Demo（`npm i && npm start`）、10 份样例 PDF、单测、`scripts/selftest.mjs`、README（含架构图与
 选型理由）、`docs/demo-script.md`（讲解稿 + 面试官追问预案）。
+
+## 11. 修订记录：实现期暴露的三个问题
+
+设计文档写完之后，接真模型与真实操作各暴露了一处问题，记录在这里（面试时这就是"踩坑 → 定位 → 兜住"的完整过程）。
+
+### 11.1 红线全红：题出错了，不是模型错了
+
+现象：接上真 Key 后 10 份简历全部带红条，包括 94% 的强匹配候选人。
+
+定位：`redlineHits = items.filter(i => i.group === 'redline' && i.verdict === 'missing')`。而红线是按**否定式**写的
+（"只能实习少于 3 个月"），四态的语义却是"简历里有证据证明满足"——好简历自然不会出现这种表述，模型只能答
+`missing`，于是每条红线都"命中"。
+
+修复：双层兜底。① `jdRubricPrompt` 单列一段要求红线必须写成正向条件、能用 must 就别设红线；② 打分侧新增
+`labelPolarity()`（否定词表）与 `isRedlineHit()`，否定式看 `met` 才算命中、正向看 `missing` 才算命中，历史 JD 与
+HR 手填内容同样正确。顺带把红线 `unknown` 从"淘汰"改为"只进追问"，一票否决权只给"明确不满足"。
+
+### 11.2 学历是分档加权，不是"卡本科"
+
+新增 `nice_school` 加成项（权重 6），系数按院校层次细分：985 ×1.0 / 211 ×0.75 / 双一流 ×0.5 / 港澳·海外 ×0.6 /
+普通本科·专科 ×0。为此 `scoreCandidate` 支持"判定自带 `factor`"，缺省才退回四态折算。
+
+院校层次属确定事实，不让模型判：`detectSchool()` 用 985/211/双一流清单（含英文校名正则）从教育经历行识别，
+`match.js` 的 `overrideSchoolTier()` 覆盖模型对该项的判定。清单只认具体校名，不认"海外""名校"这类泛词——
+第一版因为一句"帮学院老师整理海外期刊数据"把普通本科判成了境外院校。
+
+### 11.3 导入新批次不能清空已有结果
+
+现象：HR 二次拖入简历时，上一批候选人的列表被清空。
+
+原因：`startRun()` 重置了 `state.candidates`，且轮询回调每轮直接覆盖。修复：新增 `mergeCandidates()`，按文件名
+合并（不同文件追加、同名文件覆盖并跟随选中项），轮询改为合并而非覆盖，完成提示改为"本批新增 N 份，共 M 位"。
