@@ -6,6 +6,7 @@ import {
   verifyEvidence,
   hasAffirmative,
   buildQuestions,
+  capRedlines,
   ruleVerdictFor,
   detectAvailability,
   detectSchool,
@@ -310,5 +311,54 @@ test('院校名不会被"帮学院老师整理数据"这类句子骗到', () => 
   // 真校名要抠出来
   assert.equal(detectSchool('2023.09 - 2026.06 武汉职业技术学院 市场营销 大专（在读）').school, '武汉职业技术学院');
   assert.equal(detectSchool('2022.09 - 2026.06 深圳大学 人工智能 本科（在读，2026 届）').school, '深圳大学');
+});
+
+// ---------------------------------------------------------------------------
+// 红线收敛：一票否决误设的代价最大，默认就不该有红线
+// ---------------------------------------------------------------------------
+
+test('红线收敛：常规条件不配当红线，最多保留 1 条', () => {
+  const raw = [
+    { id: 'studying', group: 'redline', label: '当前为在读学生（本科/大专/研究生），可正常提供实习身份与在校证明', weight: 0 },
+    { id: 'ai_proof', group: 'redline', label: '简历中存在可核实的编程或 AI 项目证据', weight: 0 },
+    { id: 'grad', group: 'redline', label: '已取得本科及以上学历', weight: 0 },
+    { id: 'm1', group: 'must', label: '能连续实习 3 个月', weight: 8 },
+  ];
+  const out = capRedlines(raw);
+
+  // "在读学生身份"里就写着"在读/学生身份"→ 不配当红线，直接丢弃（既淘汰不了人，也不占名额）
+  assert.equal(out.some((r) => r.id === 'studying'), false);
+  // "已取得本科及以上学历"含"学历"→ 降级为 must，不再一票否决
+  assert.equal(out.find((r) => r.id === 'grad').group, 'must');
+  assert.ok(out.find((r) => r.id === 'grad').weight >= 5);
+  // 剩下的红线最多 1 条
+  const reds = out.filter((r) => r.group === 'redline');
+  assert.ok(reds.length <= 1);
+  for (const r of reds) assert.equal(r.weight, 0);
+  // 原有 must 原样保留
+  assert.equal(out.find((r) => r.id === 'm1').weight, 8);
+});
+
+test('红线收敛：多于 1 条时超额的那条降级为硬性要求，而不是直接丢掉', () => {
+  const raw = [
+    { id: 'a', group: 'redline', label: '不接受远程办公', weight: 0 },
+    { id: 'b', group: 'redline', label: '接受出差', weight: 0 },
+    { id: 'c', group: 'redline', label: '有合法工作许可', weight: 0 },
+  ];
+  const out = capRedlines(raw);
+  const reds = out.filter((r) => r.group === 'redline');
+  assert.equal(reds.length, 1);
+  assert.equal(out.filter((r) => r.group === 'must').length, 2);
+  assert.equal(out.length, 3); // 降级不等于丢弃，条件本身仍然参与打分
+});
+
+test('红线收敛后的 JD 不会让任何候选人因"在读学生"被一票否决', () => {
+  const { rubrics } = ruleRubricsFromJD('要求计算机相关专业本科在读，能连续实习 3 个月以上。');
+  const capped = capRedlines(rubrics);
+  assert.ok(capped.filter((r) => r.group === 'redline').length <= 1);
+
+  const items = capped.map((r) => ({ rubric_id: r.id, verdict: 'missing' }));
+  const score = scoreCandidate(capped, items);
+  assert.equal(score.redlineHits.length, 0, '红线全部 missing 也不该命中（因为根本没有红线项）');
 });
 

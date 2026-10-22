@@ -101,6 +101,8 @@ export function candidateView(c) {
     status: c.status,
     mode: c.mode,
     degraded: c.degraded,
+    // 降级原因要说出来：模型超时 / JSON 坏了 / 额度不足，处理方式完全不同
+    warning: c.warning || '',
     name:
       c.profile?.name ||
       (c.status === 'unparsed' || c.status === 'failed' ? c.fileName.replace(/\.[^.]+$/, '') : '解析中…'),

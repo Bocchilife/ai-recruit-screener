@@ -973,6 +973,46 @@ export function ensureSchoolRubric(rubrics) {
   return [...list, SCHOOL_RUBRIC];
 }
 
+/**
+ * 红线收敛：默认不设红线（一票否决误设的代价最大）。
+ * - 最多保留 1 条（MAX_REDLINES）
+ * - 在读学生身份 / 在校证明 / 可实习时长 / 学历本科 / 专业 / 编程基础 / 英语 这类常规条件不配当红线
+ * 被剔除的红线**降级为 must 或丢弃**：涉及"能实习多久、学历、专业、编程、英语"的转为 must，其余直接丢弃。
+ */
+const MAX_REDLINES = 1;
+const NOT_A_REDLINE_RE = /在读|在校|学生身份|在校证明|实习证明|学历|本科|大专|硕士|专科|专业|编程|代码|英语|外语|口语|实习时长|到岗/;
+// 身份/材料类条件（"在读学生""能提供在校证明"）连 must 都不该当：
+// 已经毕业的好候选人会被它判成"不符合"，正确做法是直接丢弃。
+const IDENTITY_CONDITION_RE = /在读|在校|学生身份|在校证明|实习证明/;
+const DOWNGRADE_TO_MUST_RE = /学历|本科|大专|硕士|专科|专业|编程|代码|英语|外语|口语|实习时长|到岗/;
+
+export function capRedlines(rubrics, max = MAX_REDLINES) {
+  const list = Array.isArray(rubrics) ? rubrics : [];
+  const out = [];
+  let kept = 0;
+  for (const r of list) {
+    if (!r || r.group !== 'redline') {
+      out.push(r);
+      continue;
+    }
+    const label = String(r.label || '');
+    if (IDENTITY_CONDITION_RE.test(label)) continue; // 身份/材料类条件：既不当红线也不当 must
+    if (NOT_A_REDLINE_RE.test(label)) {
+      if (DOWNGRADE_TO_MUST_RE.test(label)) {
+        out.push({ ...r, group: 'must', weight: Math.min(8, Math.max(5, Number(r.weight) || 6)) });
+      }
+      continue; // 不配当红线的直接丢弃（不淘汰任何人）
+    }
+    if (kept >= max) {
+      out.push({ ...r, group: 'must', weight: Math.min(8, Math.max(5, Number(r.weight) || 6)) });
+      continue;
+    }
+    kept += 1;
+    out.push({ ...r, weight: 0 });
+  }
+  return out;
+}
+
 export function ruleRubricsFromJD(jdText) {
   const text = String(jdText || '');
   const out = [];

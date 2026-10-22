@@ -120,7 +120,7 @@ export async function processCandidate({ candidate, jd, buffer }) {
 
   if (llmAvailable()) {
     try {
-      const { data, usage: u } = await chatJSON(analyzePrompt(jd.rubrics, rawText.slice(0, 12000)));
+      const { data, usage: u } = await chatJSON({ ...analyzePrompt(jd.rubrics, rawText.slice(0, 12000)), maxTokens: 6000 });
       const gotVerdicts = Array.isArray(data?.verdicts) ? data.verdicts : null;
       if (!gotVerdicts || gotVerdicts.length === 0) throw new Error('模型未返回有效判定');
       verdicts = gotVerdicts;
@@ -210,3 +210,4 @@ function mergeUsage(a, b) {
     total_tokens: (a.total_tokens || 0) + (b.total_tokens || 0),
   };
 }
+

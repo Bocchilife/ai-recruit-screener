@@ -488,7 +488,7 @@ function renderList() {
     // 全批都是规则模式时每行都挂一个"规则"标签只是噪音。
     if (c.degraded && state.mode === 'llm') {
       const tag = el('span', 'mini-tag warn', '已降级');
-      tag.title = '这份简历的模型判定失败，已用规则引擎给出结果';
+      tag.title = c.warning || '这份简历的模型判定失败，已用规则引擎给出结果';
       nameRow.append(tag);
     }
     main.append(nameRow);
@@ -608,6 +608,7 @@ function renderDetail(c) {
       <span class="meta-chip">${c.mode === 'llm' && !c.degraded ? 'LLM 判定' : '规则判定'}</span>
     </div>
     <div class="reason-box">结论依据：<b>${esc(c.score.decision?.reason || '')}</b></div>
+    ${c.degraded && c.warning ? `<div class="degrade-note">本份已降级为规则判定：${esc(c.warning)}</div>` : ''}
     <div class="d-meta">
       <span class="meta-chip">符合 <b>${stats.met ?? 0}</b></span>
       <span class="meta-chip">部分 <b>${stats.partial ?? 0}</b></span>
@@ -740,3 +741,4 @@ $('#btnReset').addEventListener('click', () => {
 });
 
 boot();
+

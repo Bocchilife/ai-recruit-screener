@@ -31,8 +31,16 @@ const FABRICATED = '精通 Golang 高并发架构设计';
 let app;
 let mock;
 let stderr = '';
-let mockMode = 'happy'; // happy | fail
+let mockMode = 'happy'; // happy | fail | truncate | redlines
+let truncateOnce = false;
 const seen = []; // 记录收到的每个请求，用于断言请求形状
+
+// 模拟真实模型最容易犯的错：把"在读学生身份""有可核实的项目证据"设成红线
+const REDLINE_RUBRICS = [
+  ...RUBRICS,
+  { id: 'studying', group: 'redline', label: '当前为在读学生（本科/大专/研究生），可正常提供实习身份与在校证明', weight: 0, type: 'experience', probe: '在校状态' },
+  { id: 'ai_proof', group: 'redline', label: '简历中存在可核实的编程或 AI 项目证据', weight: 0, type: 'skill', probe: '项目证据' },
+];
 
 async function api(pathname, options) {
   const res = await fetch(BASE + pathname, options);
@@ -62,7 +70,7 @@ function respond(messages) {
       role: 'AI 自动化项目实习生',
       seniority: '实习',
       summary: '找一个能把 AI 落到真实业务里的计算机专业学生',
-      rubrics: RUBRICS,
+      rubrics: mockMode === 'redlines' ? REDLINE_RUBRICS : RUBRICS,
     };
     return '```json\n' + JSON.stringify(payload) + '\n```';
   }
@@ -132,6 +140,14 @@ before(async () => {
       if (mockMode === 'fail') {
         return json(res, { error: { message: 'mock upstream is down' } }, 500);
       }
+      // 模拟输出被 max_tokens 截断：真实 API 会返回 finish_reason='length' + 半截 JSON
+      if (mockMode === 'truncate' && truncateOnce) {
+        truncateOnce = false;
+        return json(res, {
+          choices: [{ message: { role: 'assistant', content: '{"profile":{"name":"张思远"' }, finish_reason: 'length' }],
+          usage: { prompt_tokens: 100, completion_tokens: 6000, total_tokens: 6100 },
+        });
+      }
       try {
         json(res, completion(respond(body.messages)));
       } catch (err) {
@@ -151,7 +167,7 @@ before(async () => {
       OPENAI_BASE_URL: `http://127.0.0.1:${MOCK_PORT}/v1`,
       OPENAI_MODEL: 'mock-model',
       DEMO_FORCE_RULE: '',
-      LLM_RETRIES: '0', // 失败路径不要退避等待，测试要快
+      LLM_RETRIES: '1', // 留一次重试：用来验证"输出被截断后放大预算重试"，同时退避很短
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -328,4 +344,70 @@ test('红线：正向条件被判 missing 时确实一票否决', { timeout: 600
   assert.equal(detail.score.redlineHits.length, 1);
   assert.equal(detail.score.decision.code, 'reject');
   assert.match(detail.score.decision.reason, /触发红线/);
+});
+
+// ---------------------------------------------------------------------------
+// 红线收敛：模型爱把"在读学生身份"设成红线，代码必须兜住（默认 0 条，最多 1 条）
+// ---------------------------------------------------------------------------
+
+test('拆 JD 时把模型设的无效红线收敛掉：常规条件不配一票否决', { timeout: 60000 }, async () => {
+  mockMode = 'redlines';
+  try {
+    const sample = (await api('/api/sample-jd')).body;
+    const res = await api('/api/jd/parse', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jd: sample.jd }),
+    });
+    assert.equal(res.status, 200, stderr);
+    const rubrics = res.body.rubrics;
+
+    // "在读学生身份"类条件连 must 都不该当，直接丢弃
+    assert.equal(rubrics.some((r) => r.id === 'studying'), false, '身份类红线必须被剔除');
+    // 红线最多 1 条，且不占权重
+    const reds = rubrics.filter((r) => r.group === 'redline');
+    assert.ok(reds.length <= 1, `红线最多 1 条，实际 ${reds.length}`);
+    for (const r of reds) assert.equal(r.weight, 0);
+    // 原有的硬性/加分项不能被误伤
+    for (const r of RUBRICS) assert.ok(rubrics.some((x) => x.id === r.id), `丢了 ${r.id}`);
+  } finally {
+    mockMode = 'happy';
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 降级的主因不是"模型不行"，而是输出被 max_tokens 截断 → JSON 不完整。
+// 这里验证：截断会自动放大预算重试，而不是直接把这份简历降级成规则结果。
+// ---------------------------------------------------------------------------
+
+test('模型输出被截断时自动放大 max_tokens 重试，不降级', { timeout: 90000 }, async () => {
+  const files = (await api('/api/samples')).body.samples.map((s) => s.name);
+  const target = files.find((f) => /^01/.test(f));
+  const jd = { role: 'AI 自动化实习生', rubrics: RUBRICS };
+  const before = seen.length;
+  mockMode = 'truncate';
+  truncateOnce = true;
+  try {
+    const started = await api('/api/screen', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jd, samples: [target] }),
+    });
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    const run = await waitRun(started.body.runId, 60000);
+    const cand = run.candidates[0];
+    assert.equal(cand.status, 'done');
+    assert.equal(cand.degraded, false, `截断重试后不该降级：${cand.warning || ''}`);
+
+    // 两次 analyze 请求：第二次的 max_tokens 必须更大
+    const analyzeCalls = seen
+      .slice(before)
+      .filter((s) => String(s.body?.messages?.[0]?.content || '').includes('简历分析器'));
+    assert.ok(analyzeCalls.length >= 2, `应发生一次重试，实际 ${analyzeCalls.length} 次`);
+    const [first, second] = analyzeCalls;
+    assert.ok(second.body.max_tokens > first.body.max_tokens, '截断后应放大输出上限');
+  } finally {
+    mockMode = 'happy';
+    truncateOnce = false;
+  }
 });

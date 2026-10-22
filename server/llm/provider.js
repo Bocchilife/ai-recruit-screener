@@ -44,12 +44,12 @@ export function extractJSON(text) {
   throw new LLMError('模型返回不是合法 JSON', { code: 'BAD_JSON' });
 }
 
-async function postOnce({ messages, jsonMode, signal }) {
+async function postOnce({ messages, jsonMode, signal, maxTokens }) {
   const payload = {
     model: config.llm.model,
     messages,
     temperature: config.llm.temperature,
-    max_tokens: 2000,
+    max_tokens: maxTokens || config.llm.maxTokens,
   };
   if (jsonMode) payload.response_format = { type: 'json_object' };
 
@@ -74,6 +74,10 @@ async function postOnce({ messages, jsonMode, signal }) {
   }
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content ?? '';
+  // 输出被 max_tokens 截断时 JSON 一定不完整，直接明确报错，让上层加预算重试而不是当成"模型返回垃圾"
+  if (data?.choices?.[0]?.finish_reason === 'length') {
+    throw new LLMError(`模型输出被 max_tokens=${payload.max_tokens} 截断`, { code: 'TRUNCATED' });
+  }
   return { content, usage: data?.usage ?? null };
 }
 
@@ -81,7 +85,7 @@ async function postOnce({ messages, jsonMode, signal }) {
  * 调用 OpenAI 兼容的 chat/completions，返回解析后的 JSON。
  * 失败按 config.llm.retries 重试，最终抛 LLMError 由上层决定是否降级到规则引擎。
  */
-export async function chatJSON({ system, user }) {
+export async function chatJSON({ system, user, maxTokens }) {
   if (!llmAvailable()) {
     throw new LLMError('未配置模型（OPENAI_API_KEY 为空或已强制规则模式）', { code: 'NO_KEY' });
   }
@@ -91,18 +95,23 @@ export async function chatJSON({ system, user }) {
   ];
 
   let jsonMode = true;
+  let budget = Number(maxTokens) || config.llm.maxTokens;
   let lastErr = null;
   for (let attempt = 0; attempt <= config.llm.retries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.llm.timeoutMs);
     try {
-      const { content, usage } = await postOnce({ messages, jsonMode, signal: controller.signal });
+      const { content, usage } = await postOnce({ messages, jsonMode, signal: controller.signal, maxTokens: budget });
       return { data: extractJSON(content), usage, raw: content };
     } catch (err) {
       lastErr = err;
       if (err?.retryWithoutJsonMode) {
         jsonMode = false;
         continue; // 立刻重试，不计入退避等待
+      }
+      if (err?.code === 'TRUNCATED') {
+        // 输出被截断：加预算重试，比让整份简历降级划算
+        budget = Math.min(8192, Math.round(budget * 1.8));
       }
       if (err?.name === 'AbortError') {
         lastErr = new LLMError(`模型调用超时（>${config.llm.timeoutMs}ms）`, { code: 'TIMEOUT' });

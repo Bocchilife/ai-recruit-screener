@@ -122,13 +122,15 @@ async function main() {
   await evaluate(`document.querySelector('#btnSampleJD').click(); true`);
   await sleep(400);
   await evaluate(`document.querySelector('#btnParseJD').click(); true`);
-  await waitFor(`!document.querySelector('#rubricPanel').classList.contains('hidden')`);
+  // 真模型拆 JD 也要几秒到几十秒
+  await waitFor(`!document.querySelector('#rubricPanel').classList.contains('hidden')`, 120000);
   await sleep(300);
   await shot('02-rubrics');
 
   await evaluate(`document.querySelector('#btnSamples').click(); true`);
-  await waitFor(`document.querySelectorAll('#candList .cand').length >= 10`, 40000);
-  await waitFor(`document.querySelector('#runBar').classList.contains('hidden')`, 40000);
+  // 真模型下一份判定要 10~30s，并发 3，10 份可能需要 2 分钟以上
+  await waitFor(`document.querySelectorAll('#candList .cand').length >= 10`, 300000);
+  await waitFor(`document.querySelector('#runBar').classList.contains('hidden')`, 300000);
   await sleep(600);
   await shot('03-list');
 
@@ -148,7 +150,9 @@ async function main() {
   const { root } = await send('DOM.getDocument', { depth: -1 });
   const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector: '#fileInput' });
   await send('DOM.setFileInputFiles', { files: [extra], nodeId });
-  await waitFor(`document.querySelectorAll('#candList .cand').length > ${rows}`, 40000);
+  await waitFor(`document.querySelectorAll('#candList .cand').length > ${rows}`, 300000);
+  // 等这一批也跑完，否则截图里会留着"解析与判据中…"的中间态
+  await waitFor(`document.querySelector('#runBar').classList.contains('hidden')`, 300000);
   await sleep(500);
   const rowsAfter = await evaluate(`document.querySelectorAll('#candList .cand').length`);
   console.log(`  再导入一份后行数：${rowsAfter}（${rowsAfter > rows ? '前面的结果没有被清空 ✓' : '被清空了 ✗'}）`);
@@ -213,3 +217,4 @@ main()
     chrome.kill();
     try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* ignore */ }
   });
+

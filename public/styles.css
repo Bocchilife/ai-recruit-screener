@@ -488,6 +488,13 @@ textarea#jdInput::placeholder { color: #b3bac5; }
 }
 .reason-box b { color: var(--ink); }
 
+.degrade-note {
+  margin: -8px 0 16px;
+  padding: 8px 12px; border-radius: var(--r-sm);
+  background: #fffaeb; border: 1px solid #fedf89;
+  font-size: 12px; color: #b54708; line-height: 1.5;
+}
+
 .section-title {
   display: flex; align-items: center; gap: 8px;
   font-size: 12px; font-weight: 700; color: var(--ink-2);

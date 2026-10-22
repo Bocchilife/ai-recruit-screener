@@ -28,8 +28,10 @@ export const config = {
     baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, ''),
     apiKey: process.env.OPENAI_API_KEY || '',
     model: process.env.OPENAI_MODEL || 'deepseek-chat',
-    timeoutMs: num(process.env.LLM_TIMEOUT_MS, 60000),
-    retries: num(process.env.LLM_RETRIES, 2),
+    // 一次判定要输出 10 条左右的 JSON，给足时间：DeepSeek 长输出很常见 60s+
+    timeoutMs: num(process.env.LLM_TIMEOUT_MS, 150000),
+    retries: num(process.env.LLM_RETRIES, 3),
+    maxTokens: num(process.env.LLM_MAX_TOKENS, 4096),
     temperature: num(process.env.LLM_TEMPERATURE, 0.1),
   },
   // DEMO_FORCE_RULE=1 可强制走规则引擎，用于演示"模型不可用"的降级路径
@@ -45,3 +47,4 @@ export function ensureDirs() {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
+

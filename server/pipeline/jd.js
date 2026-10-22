@@ -1,7 +1,7 @@
 import { llmAvailable } from '../config.js';
 import { chatJSON } from '../llm/provider.js';
 import { jdRubricPrompt } from '../llm/prompts.js';
-import { ensureSchoolRubric, normalizeRubrics, ruleRubricsFromJD } from '../scoring/rules.js';
+import { capRedlines, ensureSchoolRubric, normalizeRubrics, ruleRubricsFromJD } from '../scoring/rules.js';
 
 export class BadRequest extends Error {
   constructor(message, hint = '') {
@@ -39,7 +39,8 @@ export async function decomposeJD(jdText) {
   if (llmAvailable()) {
     try {
       const { data, usage } = await chatJSON(jdRubricPrompt(text));
-      const rubrics = normalizeRubrics(ensureSchoolRubric(data?.rubrics));
+      // 红线默认不设：模型偶尔会把"在读学生""能实习多久"写成红线，一票否决误设代价最大，这里收敛到最多 1 条
+      const rubrics = normalizeRubrics(capRedlines(ensureSchoolRubric(data?.rubrics)));
       const scored = rubrics.filter((r) => r.group !== 'redline');
       if (scored.length < 3) throw new Error(`模型只拆出 ${scored.length} 条有效评估项`);
       return {
