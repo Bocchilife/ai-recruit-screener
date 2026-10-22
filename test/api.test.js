@@ -19,6 +19,17 @@ async function api(pathname, options) {
   return { status: res.status, body: isJson ? await res.json() : await res.text() };
 }
 
+async function waitRun(runId, timeoutMs = 60000) {
+  const deadline = Date.now() + timeoutMs;
+  let run;
+  while (Date.now() < deadline) {
+    run = (await api(`/api/run/${runId}`)).body;
+    if (run?.status === 'done') return run;
+    await sleep(300);
+  }
+  throw new Error(`run ${runId} 超时未完成`);
+}
+
 before(async () => {
   fs.rmSync(path.join(ROOT, DATA_DIR), { recursive: true, force: true });
   server = spawn(process.execPath, ['server/index.js'], {
@@ -131,6 +142,44 @@ test('端到端：拆 JD → 跑 10 份样例 → 拿判定与证据 → 导出 
   const csvText = bytes.subarray(3).toString('utf8');
   assert.match(csvText, /文件名/);
   assert.match(csvText, /建议进入人工复核/);
+});
+
+test('上传自己的简历（multipart）：中文文件名不乱码，JD 不丢', { timeout: 60000 }, async () => {
+  const sample = (await api('/api/sample-jd')).body;
+  const parsed = (
+    await api('/api/jd/parse', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jd: sample.jd }),
+    })
+  ).body;
+
+  const files = (await api('/api/samples')).body.samples.map((s) => s.name);
+  const pdf = path.join(ROOT, 'samples', files.find((f) => /^01/.test(f)));
+  const buf = fs.readFileSync(pdf);
+
+  // 这是 HR 真正会走的路径：浏览器把文件塞进 FormData，文件名是 UTF-8 中文
+  const form = new FormData();
+  form.append('jd', JSON.stringify(parsed));
+  form.append('files', new Blob([buf], { type: 'application/pdf' }), '张思远-我的简历.pdf');
+  form.append('files', new Blob([Buffer.from('孙悦 15900000000 求职简历\n熟悉 SQL 与大模型应用，可实习 6 个月\n深圳大学 统计学 本科 2023 届\n', 'utf8')], { type: 'text/plain' }), '手输的简历.txt');
+
+  const started = await fetch(`${BASE}/api/screen`, { method: 'POST', body: form }).then(async (r) => ({
+    status: r.status,
+    body: await r.json(),
+  }));
+  assert.equal(started.status, 202, JSON.stringify(started.body));
+  assert.equal(started.body.total, 2);
+
+  const run = await waitRun(started.body.runId);
+  assert.equal(run.status, 'done');
+  const names = run.candidates.map((c) => c.fileName).sort();
+  // multer 按 latin1 解码文件名，服务端要转回 UTF-8；转错的症状是"寮犳€濊繙"这类乱码
+  assert.ok(names.includes('张思远-我的简历.pdf'), `文件名乱码：${names.join(' / ')}`);
+  assert.ok(names.includes('手输的简历.txt'), `文件名乱码：${names.join(' / ')}`);
+  assert.ok(run.candidates.every((c) => c.status === 'done'));
+  // JD 要跟着 multipart 的 jd 字段一起传到（multer 会重置 body，所以这条必须测）
+  assert.ok(run.candidates.every((c) => c.confirmedPct > 0));
 });
 
 test('错误输入给出可读的 4xx，而不是 500', { timeout: 30000 }, async () => {

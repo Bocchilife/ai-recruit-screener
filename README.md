@@ -33,7 +33,7 @@ OPENAI_MODEL=deepseek-chat
 
 | 命令 | 作用 |
 | --- | --- |
-| `npm test` | 22 个自动化测试：打分规则、四态判定、证据校验、文档解析、HTTP 端到端、LLM 链路（含降级） |
+| `npm test` | 23 个自动化测试：打分规则、四态判定、证据校验、文档解析、HTTP 端到端、LLM 链路（含降级） |
 | `npm run demo:check` | 面试前 10 秒自检：拆 JD + 解析全部样例 + 打分，打印一张表，不起服务 |
 | `npm run samples` | 重新生成 10 份样例简历（PDF / 扫描件 / 纯文本） |
 
