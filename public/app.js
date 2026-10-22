@@ -213,9 +213,21 @@ function renderRubrics(jd) {
   }
 
   updateTotal();
-  const soft = (jd.softSkipped || []).length ? `已跳过软性描述（如${jd.softSkipped.slice(0, 2).join('、')}），要求可验证、可举证。` : '';
+  const skipped = jd.softSkipped || [];
+  const soft = skipped.length ? `已剔除 ${skipped.length} 条无法判定的软性要求。` : '';
   const warn = jd.warning ? ` ${jd.warning}` : '';
-  $('#rubricNote').textContent = `${jd.role ? `岗位：${jd.role}。` : ''}分数 = 各项权重 × 判定系数（符合 1 / 部分 0.6 / 其它 0）。${soft}${warn}`;
+  const note = $('#rubricNote');
+  note.textContent = `分数 = 权重 × 系数（符合 1 / 部分 0.6 / 其它 0）。${soft}${warn}`;
+  // 完整名单放进 tooltip，正文只留一句结论
+  if (skipped.length) note.title = `未参与判定的软性要求：${skipped.join('、')}`;
+  // 空态文案跟着当前进度走：JD 还没拆 / 已拆但还没简历，提示的下一步不一样
+  const empty = $('#emptyList');
+  if (empty) {
+    const [title, sub] = empty.querySelectorAll('p');
+    title.textContent = '评估表已就绪，还没有候选人。';
+    sub.textContent = '把简历拖到上方，或点「用内置样例简历跑一遍」。';
+  }
+
   $('#jdHint').textContent = '权重可改、条目可删，改完直接筛选';
 }
 

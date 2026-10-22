@@ -254,6 +254,9 @@ textarea#jdInput::placeholder { color: #b3bac5; }
   min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
+  /* 底部淡出，暗示"还有内容，可以滚"，避免整行被硬切断 */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
 }
 
 .rubric-group-title {
