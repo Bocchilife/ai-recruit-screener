@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>简历智能初筛 · AI 招聘助手</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>" />
+  </head>
+  <body>
+    <div class="app">
+      <!-- ================= 顶栏 ================= -->
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">筛</div>
+          <div class="brand-text">
+            <b>简历智能初筛</b>
+            <small>模型负责「判定 + 举证」，分数由代码计算</small>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <span class="mode-badge" id="modeBadge" title="当前模型模式">连接中…</span>
+          <button class="ghost" id="btnReset">重新开始</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <!-- ================= 第 1 栏：JD ================= -->
+        <section class="col col-jd">
+          <div class="col-head">
+            <span class="step">1</span>
+            <h2>岗位需求</h2>
+            <button class="link" id="btnSampleJD">填入示例 JD</button>
+          </div>
+
+          <textarea
+            id="jdInput"
+            spellcheck="false"
+            placeholder="把岗位 JD 粘贴到这里，例如&#10;&#10;岗位职责：&#10;1. 负责 AI 工作流搭建…&#10;我们希望你能：&#10;1. 计算机相关专业，有编程基础&#10;2. 能连续实习 3-6 个月"
+          ></textarea>
+
+          <div class="jd-actions">
+            <button class="primary" id="btnParseJD">拆解成评估项</button>
+            <span class="hint" id="jdHint">粘贴 JD 后拆解成可判定的评估项</span>
+          </div>
+
+          <div class="rubric-panel hidden" id="rubricPanel">
+            <div class="rubric-head">
+              <span>评估项 · 权重可改</span>
+              <span class="total" id="totalWeight"></span>
+            </div>
+            <div id="rubricList" class="rubric-list"></div>
+            <button class="primary wide" id="btnScreen">用这份评分表开始筛选 →</button>
+            <p class="fineprint" id="rubricNote"></p>
+          </div>
+        </section>
+
+        <!-- ================= 第 2 栏：候选人列表 ================= -->
+        <section class="col col-list">
+          <div class="col-head">
+            <span class="step">2</span>
+            <h2>候选人</h2>
+            <span class="count" id="candCount"></span>
+          </div>
+
+          <div class="dropzone" id="dropzone">
+            <input type="file" id="fileInput" multiple accept=".pdf,.docx,.txt,.md" hidden />
+            <div class="dz-icon">⇪</div>
+            <b>拖入简历，或点击选择</b>
+            <span>PDF / Word / TXT，单份 ≤ 8MB，一次最多 20 份</span>
+          </div>
+
+          <button class="secondary wide" id="btnSamples">用内置样例简历跑一遍（10 份）</button>
+
+          <div class="runbar hidden" id="runBar">
+            <div class="runbar-text" id="runBarText">处理中…</div>
+            <div class="progress"><span id="progressFill"></span></div>
+          </div>
+
+          <div class="filters" id="filters"></div>
+
+          <ul class="cand-list" id="candList"></ul>
+          <div class="empty-list" id="emptyList">
+            <p>还没有候选人。</p>
+            <p class="dim">先在第 1 栏拆解 JD，再把简历拖进来（或用样例简历）。</p>
+          </div>
+        </section>
+
+        <!-- ================= 第 3 栏：详情 ================= -->
+        <section class="col col-detail" id="detail">
+          <div class="detail-empty" id="detailEmpty">
+            <div class="de-illu">
+              <span>匹配度</span>
+              <b>88%</b>
+              <i>每一项都可点开看证据</i>
+            </div>
+            <h3>选中一位候选人，看他是怎么被判断的</h3>
+            <ul class="de-points">
+              <li><b>四条判定</b>符合 / 部分符合 / 不符合 / <em>待确认</em></li>
+              <li><b>证据溯源</b>每句理由都指向简历原文</li>
+              <li><b>追问清单</b>简历没写的不猜，直接生成问题</li>
+              <li><b>触达话术</b>一键复制，HR 直接用</li>
+            </ul>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toasts" id="toasts"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

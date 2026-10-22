@@ -1,0 +1,26 @@
+{
+  "name": "ai-recruit-screener",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 招聘简历智能筛选助手 — JD 结构化 / 简历解析 / 逐条判定 / 可解释打分",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "samples": "node scripts/gen-samples.mjs",
+    "test": "node --test",
+    "demo:check": "node scripts/selftest.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "mammoth": "^1.10.0",
+    "multer": "^2.0.2",
+    "pdfjs-dist": "^5.4.149"
+  },
+  "devDependencies": {
+    "pdfkit": "^0.17.2"
+  }
+}
